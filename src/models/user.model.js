@@ -1,0 +1,92 @@
+import mongoose,{Schema} from "mongoose";
+import jwt from "jsonwebtoken"
+import bcrypt from "bcrypt" //A library to help you hash passwords.
+//pre hook is used as a middleware, 
+//we can do anything with the data recieved in the reuqest, before it is saved in the database
+const userSchema = new Schema(
+    {
+        username: {
+            type: String,
+            required: true,
+            unique: true,
+            lowercase: true,
+            trim: true,
+            index: true
+        },
+        email: {
+            type: String,
+            required: true,
+            unique: true,
+            lowercase: true,
+            trim: true,
+        },
+        fullName: {
+            type: String,
+            required: true,
+            trim: true,
+            index: true
+        },
+        avatar: {
+            type: String, //Cloudinary url will use for images
+            required: true,
+        },
+        coverImage: {
+            type: String, //Cloudinary url will use for images
+        },
+        watchHistory: {
+            type: [{
+                type: Schema.Types.ObjectId,
+                ref: "Video"
+            }]
+        },
+        password: {
+            type: String,
+            required: [true,"password is required!"],
+        },
+        refreshToken: {
+            type: String,
+        }
+
+    }
+    ,
+    {timestamps:true}
+)
+
+userSchema.pre("save", async function (next){
+    if(!this.isModified("password")) return next();
+
+    this.password = bcrypt.hash(this.password,10)
+    next();
+
+})
+
+
+//function to check if user entered the correct password
+userSchema.methods.isPasswordCorrect = async function(password){
+   return await bcrypt.compare(password,this.password)
+}
+
+userSchema.methods.generateAccessTokens = async function(){
+    return jwt.sign(
+        {
+            _id: this.id,
+            email: this.email,
+            username: this.username,
+            fullName: this.fullName
+        },
+        process.env.ACCESS_TOKEN_SECRET,{
+            expiresIn: process.env.ACCESS_TOKEN_EXPIRY
+        }
+    )
+}
+userSchema.methods.generateRefreshTokens = async function(){
+    return jwt.sign(
+        {
+            _id: this.id,
+        },
+        process.env.REFRESH_TOKEN_SECRET,{
+            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
+        }
+    )
+}
+export const User = mongoose.model("User",userSchema)
