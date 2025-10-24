@@ -5,7 +5,25 @@ import {uploadOnCloudinary} from '../utils/Cloudinary.js'
 import { ApiResponse } from '../utils/ApiResponse.js';
 import multer from 'multer';
 import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken'
 
+const generateAccessAndRefereshTokens = async(userId) =>{
+    try {
+        const user = await User.findById(userId)
+        const accessToken = user.generateAccessToken()
+
+        const refreshToken = user.generateRefreshToken()
+
+        user.refreshToken = refreshToken
+        await user.save({ validateBeforeSave: false })
+
+        return {accessToken, refreshToken}
+
+
+    } catch (error) {
+        throw new ApiError(500, "Something went wrong while generating referesh and access token")
+    }
+}
 
 const registerUser = asyncHandler(async (req,res) => {
 //     steps:
@@ -74,4 +92,119 @@ res.status(201).json(new ApiResponse(200, createdUser, "User registered successf
 
 })
 
-export {registerUser}
+const loginUser = asyncHandler(async (req,res) => {
+//1. req body madhun data gheun ye
+
+const {email, username, password} = req.body;
+
+//2.username or email based login
+if(!username && !email){
+    throw new ApiError(400, "username or email is required! ")
+}
+//3.find the user
+const user = await User.findOne({
+    $or: [{email},{username}]
+})
+
+if(!user){
+    throw new ApiError(404,"User Does Not Exist! ")
+}
+//4. password check
+    const isPasswordValid = await user.isPasswordCorrect(password)
+    if(!isPasswordValid){
+        throw new ApiError(401,"Invalid User Credentials! ")
+    }
+
+//5. access and refresh token 
+    
+    const {accessToken,refreshToken} = await generateAccessAndRefereshTokens(user._id)
+
+    const loggedInUser = await User.findById(user._id).select(
+        "-password -refreshToken"
+    )
+
+    const options ={
+        httpOnly: true,
+        secure: true
+    }
+
+    return res.status(200)
+    .cookie("accessToken",accessToken,options)
+    .cookie("refreshToken",refreshToken,options)
+    .json(
+        new ApiResponse(
+            200, {user: loggedInUser,accessToken,refreshToken},
+            "user logged in successfully! "
+        )
+    )
+
+//6. send access and refresh token in the form of cookies
+
+
+
+
+
+})
+
+const logoutUser = asyncHandler(async(req,res) => {
+    //find user id and fetch user object using that id
+    //delete the refresh token from that user object to logout the user
+    await User.findByIdAndUpdate(
+        req.user._id,{
+            $unset:{refreshToken: 1} //this removes the field from the document
+        },
+        {
+            new: true
+        }
+    )
+
+     const options = {
+        httpOnly: true,
+        secure: true
+    }
+
+    return res
+    .status(200)
+    .clearCookie("accessToken",options)
+    .clearCookie("refreshToken",options)
+    .json(new ApiResponse(200,{},"User successfully logged out!"))
+
+
+})
+
+const refreshAccessToken = asyncHandler(async(req,res) => {
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
+
+    if(!incomingRefreshToken){
+        throw new ApiError(401,"Refresh token not received! ")
+    }
+
+    try {
+        const decodedToken = jwt.verify(incomingRefreshToken,process.env.REFRESH_TOKEN_SECRET)
+        const user = await User.findById(decodedToken?._id);
+    
+        if(!user){
+            throw new ApiError(401,"Invalid refresh token! ")
+        }
+    
+        if(incomingRefreshToken!==user?.refreshToken){
+            throw new ApiError(401,"Refresh token is expired or used")
+        }
+    
+        const options = {
+            httpOnly: true, secure: true
+        }
+    
+        const {accessToken,newRefreshToken} = await generateAccessAndRefereshTokens(user._id)
+    
+        return res
+        .status(200)
+        .cookie("accessToken",accessToken,options)
+        .cookie("refreshToken",newRefreshToken,options)
+        .json(new ApiResponse(200,{accessToken,newRefreshToken},"Access token refreshed successfully! "))
+    } catch (error) {
+        throw new ApiError(401,error?.message || "Invalid refresh token")
+    }
+})
+
+export {registerUser,loginUser,logoutUser,refreshAccessToken}
